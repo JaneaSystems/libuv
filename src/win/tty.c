@@ -63,10 +63,16 @@ static int uv__cancel_read_console(uv_tty_t* handle);
 /* Null uv_buf_t */
 static const uv_buf_t uv_null_buf_ = { 0, NULL };
 
-static CRITICAL_SECTION uv__read_console_trap_lock;
-static volatile BOOL uv__read_console_trap = FALSE;
-static volatile BOOL uv__read_console_started = FALSE;
-static HANDLE uv__read_console_done_event = INVALID_HANDLE_VALUE;
+enum uv__read_console_status_e {
+  NOT_STARTED,
+  IN_PROGRESS,
+  TRAP_REQUESTED,
+  COMPLETED
+};
+
+static volatile LONG uv__read_console_status = NOT_STARTED;
+static volatile LONG uv__restore_screen_state;
+static CONSOLE_SCREEN_BUFFER_INFO uv__saved_screen_state;
 
 
 /*
@@ -115,10 +121,6 @@ static char uv_tty_default_inverse = 0;
 
 void uv_console_init() {
   InitializeCriticalSection(&uv_tty_output_lock);
-  InitializeCriticalSection(&uv__read_console_trap_lock);
-  uv__read_console_done_event = CreateEvent(NULL, 1, 0, NULL);
-  if (uv__read_console_done_event == NULL)
-    abort();
 }
 
 
@@ -409,7 +411,8 @@ static DWORD CALLBACK uv_tty_line_read_thread(void* data) {
   DWORD bytes, read_bytes;
   WCHAR utf16[MAX_INPUT_BUFFER_LENGTH / 3];
   DWORD chars, read_chars;
-  BOOL canceled;
+  LONG status;
+  COORD pos;
 
   assert(data);
 
@@ -431,15 +434,8 @@ static DWORD CALLBACK uv_tty_line_read_thread(void* data) {
   /* One utf-16 codeunit never takes more than 3 utf-8 codeunits to encode */
   chars = bytes / 3;
 
-  EnterCriticalSection(&uv__read_console_trap_lock);
-  canceled = uv__read_console_trap;
-  if (!canceled) {
-    uv__read_console_started = TRUE;
-    ResetEvent(uv__read_console_done_event);
-  }
-  LeaveCriticalSection(&uv__read_console_trap_lock);
-
-  if (canceled) {
+  status = InterlockedExchange(&uv__read_console_status, IN_PROGRESS);
+  if (status == TRAP_REQUESTED) {
     SET_REQ_SUCCESS(req);
     req->u.io.overlapped.InternalHigh = 0;
     POST_COMPLETION_FOR_REQ(loop, req);
@@ -465,7 +461,32 @@ static DWORD CALLBACK uv_tty_line_read_thread(void* data) {
     SET_REQ_ERROR(req, GetLastError());
   }
 
-  SetEvent(uv__read_console_done_event);
+  InterlockedExchange(&uv__read_console_status, COMPLETED);
+
+  /* If we canceled the read by sending a VK_RETURN event, restore the screen
+     state to undo the visual effect of the VK_RETURN*/
+  if (InterlockedOr(&uv__restore_screen_state, 0)) {
+    HANDLE active_screen_buffer = CreateFileA("conout$",
+                                         GENERIC_READ | GENERIC_WRITE,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                         NULL,
+                                         OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL,
+                                         NULL);
+    if (active_screen_buffer != INVALID_HANDLE_VALUE) {
+      pos = uv__saved_screen_state.dwCursorPosition;
+
+      /* If the cursor was at the bottom line of the screen buffer, the
+         VK_RETURN would have caused the buffer contents to scroll up by
+         one line. The right position to reset the cursor to is therefore one
+         line higher */
+      if (pos.Y == uv__saved_screen_state.dwSize.Y - 1)
+        pos.Y--;
+
+      SetConsoleCursorPosition(active_screen_buffer, pos);
+      CloseHandle(active_screen_buffer);
+    }
+  }
 
   POST_COMPLETION_FOR_REQ(loop, req);
   return 0;
@@ -493,11 +514,10 @@ static void uv_tty_queue_read_line(uv_loop_t* loop, uv_tty_t* handle) {
   assert(handle->tty.rd.read_line_buffer.base != NULL);
 
   /* Reset flags  No locking is required since there cannot be a line read
-     in progress. QueueUserWorkItem probably acts as a memory barrier,
-     but we add an explicit one to be extra safe */
-  uv__read_console_started = FALSE;
-  uv__read_console_trap = FALSE;
-  MemoryBarrier();
+     in progress. We are also relying on the memory barrier provided by
+     QueueUserWorkItem*/
+  uv__restore_screen_state = FALSE;
+  uv__read_console_status = NOT_STARTED;
   r = QueueUserWorkItem(uv_tty_line_read_thread,
                         (void*) req,
                         WT_EXECUTELONGFUNCTION);
@@ -986,28 +1006,18 @@ int uv_tty_read_stop(uv_tty_t* handle) {
 
 static int uv__cancel_read_console(uv_tty_t* handle) {
   HANDLE active_screen_buffer = INVALID_HANDLE_VALUE;
-  CONSOLE_SCREEN_BUFFER_INFO info;
-  BOOL restore_screen_state;
   INPUT_RECORD record;
   DWORD written;
   DWORD err = 0;
+  LONG status;
 
-  EnterCriticalSection(&uv__read_console_trap_lock);
-  if (!uv__read_console_started) {
-    /* We have managed to trap the other thread before ReadConsole is called */
-    uv__read_console_trap = TRUE;
-    LeaveCriticalSection(&uv__read_console_trap_lock);
+  status = InterlockedExchange(&uv__read_console_status, TRAP_REQUESTED);
+  if (status != IN_PROGRESS) {
+    /* Either we have managed to set a trap for the other thread before
+       ReadConsole is called, or ReadConsole has returned because the user
+       has pressed ENTER. In either case, there is nothing else to do. */
     return 0;
   }
-  LeaveCriticalSection(&uv__read_console_trap_lock);
-
-  /* If ReadConsole already returned (the user pressed ENTER),
-     there is nothing to do */
-  if (WaitForSingleObject(uv__read_console_done_event, 0) == WAIT_OBJECT_0)
-    return 0;
-
-  /* From this point return should only happen by jumping to the out label
-     to ensure proper cleanup */
 
   /* Save screen state before sending the VK_RETURN event */
   active_screen_buffer = CreateFileA("conout$",
@@ -1019,10 +1029,9 @@ static int uv__cancel_read_console(uv_tty_t* handle) {
                                      NULL);
 
   if (active_screen_buffer != INVALID_HANDLE_VALUE &&
-      GetConsoleScreenBufferInfo(active_screen_buffer, &info)) {
-    restore_screen_state = TRUE;
-  } else {
-    restore_screen_state = FALSE;
+      GetConsoleScreenBufferInfo(active_screen_buffer,
+                                 &uv__saved_screen_state)) {
+    InterlockedOr(&uv__restore_screen_state, 1);
   }
 
   /* Write enter key event to force the console wait to return. */
@@ -1034,24 +1043,9 @@ static int uv__cancel_read_console(uv_tty_t* handle) {
     MapVirtualKeyW(VK_RETURN, MAPVK_VK_TO_VSC);
   record.Event.KeyEvent.uChar.UnicodeChar = L'\r';
   record.Event.KeyEvent.dwControlKeyState = 0;
-  if (!WriteConsoleInputW(handle->handle, &record, 1, &written)) {
+  if (!WriteConsoleInputW(handle->handle, &record, 1, &written))
     err = GetLastError();
-    goto out;
-  } else {
-    /* At this point, we have sent the VK_RETURN.
-       Any further errors shouldn't be be returned. */
-    err = 0;
-  }
 
-  WaitForSingleObject(uv__read_console_done_event, INFINITE);
-
-  /* Restore the screen state to undo the effect of the VK_RETURN we sent */
-  if (!restore_screen_state)
-    goto out;
-
-  SetConsoleCursorPosition(active_screen_buffer, info.dwCursorPosition);
-
- out:
   if (active_screen_buffer != INVALID_HANDLE_VALUE)
     CloseHandle(active_screen_buffer);
 
