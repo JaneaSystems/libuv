@@ -1162,12 +1162,57 @@ int uv_spawn(uv_loop_t* loop,
   return uv_translate_sys_error(err);
 }
 
+static BOOL CALLBACK uv__close_window_enum_callback(HWND hwnd, LPARAM target_pid) {
+  DWORD window_pid;
+  GetWindowThreadProcessId(hwnd, &window_pid);
+  if (window_pid == target_pid) {
+    PostMessage(hwnd, WM_CLOSE, 0 0);
+  }
+  return TRUE;
+}
 
-static int uv__kill(HANDLE process_handle, int signum) {
+static DWORD WINAPI uv__finalize_terminate_window(void* param) {
+  HANDLE handle = param;
+  if (WaitForSingleObject(handle, 5000) != WAIT_OBJECT_0) {
+    TerminateProcess(handle, 1);
+  }
+  CloseHandle(handle);
+  return 0;
+}
+
+static int uv__kill(HANDLE process_handle, int pid, int signum) {
   switch (signum) {
     case SIGTERM:
-    case SIGKILL:
     case SIGINT: {
+      DWORD status;
+      HANDLE terminate_handle;      
+      /* Test if the process already terminated */
+      if (!GetExitCodeProcess(process_handle, &status))
+        return uv_translate_sys_error(GetLastError());
+      if (status != STILL_ACTIVE)
+        return UV_ESRCH;
+      /* Send WM_CLOSE to all windows of the process */
+      //terminate_handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+      DuplicateHandle(GetCurrentProcess(),
+                      process_handle,
+                      GetCurrentProcess(),
+                      &terminate_handle,
+                      0,
+                      FALSE,
+                      DUPLICATE_SAME_ACCESS);
+      EnumWindows((WNDENUMPROC)uv__close_window_enum_callback, (LPARAM) pid);
+      /* Schedule a timer in threadpool to call TerminateProcess if WM_CLOSE */
+      /* is not enough to kill the process */
+      if (!QueueUserWorkItem(uv__finalize_terminate_window,
+                             terminate_handle,
+                             WT_EXECUTEDEFAULT)) {
+        /*  If it failed we will terminate right away */
+        TerminateProcess(terminate_handle, 1);
+        CloseHandle(terminate_handle);
+      }
+      return 0;
+    }
+    case SIGKILL: {
       /* Unconditionally terminate the process. On Windows, killed processes */
       /* normally return 1. */
       DWORD status;
@@ -1215,7 +1260,7 @@ int uv_process_kill(uv_process_t* process, int signum) {
     return UV_EINVAL;
   }
 
-  err = uv__kill(process->process_handle, signum);
+  err = uv__kill(process->process_handle, process->pid, signum);
   if (err) {
     return err;  /* err is already translated. */
   }
@@ -1229,7 +1274,7 @@ int uv_process_kill(uv_process_t* process, int signum) {
 int uv_kill(int pid, int signum) {
   int err;
   HANDLE process_handle = OpenProcess(PROCESS_TERMINATE |
-    PROCESS_QUERY_INFORMATION, FALSE, pid);
+    PROCESS_QUERY_INFORMATION | SYNCHRONIZE, FALSE, pid);
 
   if (process_handle == NULL) {
     err = GetLastError();
@@ -1240,7 +1285,7 @@ int uv_kill(int pid, int signum) {
     }
   }
 
-  err = uv__kill(process_handle, signum);
+  err = uv__kill(process_handle, pid, signum);
   CloseHandle(process_handle);
 
   return err;  /* err is already translated. */
