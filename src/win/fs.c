@@ -904,7 +904,6 @@ void fs__write_filemap(uv_fs_t* req, HANDLE file,
   LARGE_INTEGER zero, pos, end_pos;
   size_t view_offset;
   LARGE_INTEGER view_base;
-  DWORD view_access;
   void* view;
   FILETIME ft;
 
@@ -966,9 +965,8 @@ void fs__write_filemap(uv_fs_t* req, HANDLE file,
 
   view_offset = pos.QuadPart % uv__allocation_granularity;
   view_base.QuadPart = pos.QuadPart - view_offset;
-  view_access = (rw_flags == UV_FS_O_RDONLY) ? FILE_MAP_READ : FILE_MAP_WRITE;
   view = MapViewOfFile(fd_info->mapping,
-                       view_access,
+                       FILE_MAP_WRITE,
                        view_base.HighPart,
                        view_base.LowPart,
                        view_offset + write_size);
