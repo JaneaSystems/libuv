@@ -792,7 +792,7 @@ void fs__read_filemap(uv_fs_t* req, struct uv__fd_info_s* fd_info) {
              this_read_size);
     }
     __except (fs__filemap_ex_filter(GetExceptionCode(),
-      GetExceptionInformation(), &err)) {
+                                    GetExceptionInformation(), &err)) {
       SET_REQ_WIN32_ERROR(req, err);
       UnmapViewOfFile(view);
       return;
@@ -980,11 +980,11 @@ void fs__write_filemap(uv_fs_t* req, HANDLE file,
     int err = 0;
     __try {
       memcpy((char*)view + view_offset + done_write,
-        req->fs.info.bufs[index].base,
-        req->fs.info.bufs[index].len);
+             req->fs.info.bufs[index].base,
+             req->fs.info.bufs[index].len);
     }
     __except (fs__filemap_ex_filter(GetExceptionCode(),
-      GetExceptionInformation(), &err)) {
+                                    GetExceptionInformation(), &err)) {
       SET_REQ_WIN32_ERROR(req, err);
       UnmapViewOfFile(view);
       return;
