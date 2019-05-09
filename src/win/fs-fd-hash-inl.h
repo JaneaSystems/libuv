@@ -23,6 +23,7 @@
 
 struct uv__fd_info_s {
   int flags;
+  BOOLEAN is_directory;
   HANDLE mapping;
   LARGE_INTEGER size;
   LARGE_INTEGER current_pos;

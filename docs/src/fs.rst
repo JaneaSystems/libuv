@@ -533,7 +533,8 @@ File open constants
 
 .. c:macro:: UV_FS_O_FILEMAP
 
-    Use a memory file mapping to access the file.
+    Use a memory file mapping to access the file. When using this flag, the
+    file cannot be open multiple times concurrently.
 
     .. note::
         `UV_FS_O_FILEMAP` is only supported on Windows.
