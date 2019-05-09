@@ -34,6 +34,7 @@
 #include "internal.h"
 #include "req-inl.h"
 #include "handle-inl.h"
+#include "fs-fd-hash-inl.h"
 
 #include <wincrypt.h>
 
@@ -126,6 +127,8 @@
 #define IS_LETTER(c) (((c) >= L'a' && (c) <= L'z') || \
   ((c) >= L'A' && (c) <= L'Z'))
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
+
 const WCHAR JUNCTION_PREFIX[] = L"\\??\\";
 const WCHAR JUNCTION_PREFIX_LEN = 4;
 
@@ -137,8 +140,18 @@ const WCHAR UNC_PATH_PREFIX_LEN = 8;
 
 static int uv__file_symlink_usermode_flag = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
 
+static DWORD uv__allocation_granularity;
+
+
 void uv_fs_init(void) {
+  SYSTEM_INFO system_info;
+
+  GetSystemInfo(&system_info);
+  uv__allocation_granularity = system_info.dwAllocationGranularity;
+
   _fmode = _O_BINARY;
+
+  uv__fd_hash_init();
 }
 
 
@@ -414,6 +427,27 @@ void fs__open(uv_fs_t* req) {
   HANDLE file;
   int fd, current_umask;
   int flags = req->fs.info.file_flags;
+  struct uv__fd_info_s fd_info;
+
+  /* Adjust flags to be compatible with the memory file mapping. Save the
+   * original flags to emulate the correct behavior. */
+  if (flags & UV_FS_O_FILEMAP) {
+    fd_info.flags = flags;
+    fd_info.current_pos.QuadPart = 0;
+
+    if ((flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR)) ==
+        UV_FS_O_WRONLY) {
+      /* CreateFileMapping always needs read access */
+      flags = (flags & ~UV_FS_O_WRONLY) | UV_FS_O_RDWR;
+    }
+
+    if (flags & UV_FS_O_APPEND) {
+      /* Clear the append flag and ensure RDRW mode */
+      flags &= ~UV_FS_O_APPEND;
+      flags &= ~(UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR);
+      flags |= UV_FS_O_RDWR;
+    }
+  }
 
   /* Obtain the active umask. umask() never fails and returns the previous
    * umask. */
@@ -444,7 +478,8 @@ void fs__open(uv_fs_t* req) {
    * Here is where we deviate significantly from what CRT's _open()
    * does. We indiscriminately use all the sharing modes, to match
    * UNIX semantics. In particular, this ensures that the file can
-   * be deleted even whilst it's open, fixing issue #1449.
+   * be deleted even whilst it's open, fixing issue
+   * https://github.com/nodejs/node-v0.x-archive/issues/1449.
    * We still support exclusive sharing mode, since it is necessary
    * for opening raw block devices, otherwise Windows will prevent
    * any attempt to write past the master boot record.
@@ -588,6 +623,35 @@ void fs__open(uv_fs_t* req) {
     return;
   }
 
+  if (flags & UV_FS_O_FILEMAP) {
+    if (!GetFileSizeEx(file, &(fd_info.size))) {
+      SET_REQ_WIN32_ERROR(req, GetLastError());
+      CloseHandle(file);
+      return;
+    }
+
+    if (fd_info.size.QuadPart == 0) {
+      fd_info.mapping = INVALID_HANDLE_VALUE;
+    }
+    else {
+      DWORD flProtect = ((fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
+        UV_FS_O_RDWR)) == UV_FS_O_RDONLY) ? PAGE_READONLY : PAGE_READWRITE;
+      fd_info.mapping = CreateFileMapping(file,
+                                          NULL,
+                                          flProtect,
+                                          fd_info.size.HighPart,
+                                          fd_info.size.LowPart,
+                                          NULL);
+      if (fd_info.mapping == NULL) {
+        SET_REQ_WIN32_ERROR(req, GetLastError());
+        CloseHandle(file);
+        return;
+      }
+    }
+
+    uv__fd_hash_add(fd, &fd_info);
+  }
+
   SET_REQ_RESULT(req, fd);
   return;
 
@@ -598,8 +662,15 @@ void fs__open(uv_fs_t* req) {
 void fs__close(uv_fs_t* req) {
   int fd = req->file.fd;
   int result;
+  struct uv__fd_info_s fd_info;
 
   VERIFY_FD(fd, req);
+
+  if (uv__fd_hash_remove(fd, &fd_info)) {
+    if (fd_info.mapping != INVALID_HANDLE_VALUE) {
+      CloseHandle(fd_info.mapping);
+    }
+  }
 
   if (fd > 2)
     result = _close(fd);
@@ -618,6 +689,110 @@ void fs__close(uv_fs_t* req) {
 }
 
 
+LONG fs__filemap_ex_filter(LONG excode, PEXCEPTION_POINTERS pep,
+                           int* perror) {
+  if (excode != EXCEPTION_IN_PAGE_ERROR) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  assert(perror != NULL);
+  if (pep && pep->ExceptionRecord &&
+      pep->ExceptionRecord->NumberParameters >= 3) {
+    NTSTATUS status = pep->ExceptionRecord->ExceptionInformation[3];
+    *perror = pRtlNtStatusToDosError(status);
+  }
+  else {
+    *perror = UV_UNKNOWN;
+  }
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+
+void fs__read_filemap(uv_fs_t* req, HANDLE handle,
+                      struct uv__fd_info_s* fd_info) {
+  int fd = req->file.fd; // VERIFY_FD done in fs__read
+  int rw_flags = fd_info->flags &
+    (UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR);
+  size_t read_size, done_read;
+  unsigned int index;
+  LARGE_INTEGER pos, end_pos;
+  size_t view_offset;
+  LARGE_INTEGER view_base;
+  void* view;
+
+  if (req->fs.info.offset == -1) {
+    pos = fd_info->current_pos;
+  } else {
+    pos.QuadPart = req->fs.info.offset;
+  }
+
+  /* Make sure we wont read past EOF. */
+  if (pos.QuadPart >= fd_info->size.QuadPart) {
+    SET_REQ_RESULT(req, 0);
+    return;
+  }
+
+  read_size = 0;
+  for (index = 0; index < req->fs.info.nbufs; ++index) {
+    read_size += req->fs.info.bufs[index].len;
+  }
+  read_size = (size_t) MIN(read_size,
+                           fd_info->size.QuadPart - pos.QuadPart);
+  if (read_size == 0) {
+    SET_REQ_RESULT(req, 0);
+    return;
+  }
+
+  end_pos.QuadPart = pos.QuadPart + read_size;
+
+  view_offset = pos.QuadPart % uv__allocation_granularity;
+  view_base.QuadPart = pos.QuadPart - view_offset;
+  view = MapViewOfFile(fd_info->mapping,
+    FILE_MAP_READ,
+    view_base.HighPart,
+    view_base.LowPart,
+    view_offset + read_size);
+  if (view == NULL) {
+    SET_REQ_WIN32_ERROR(req, GetLastError());
+    return;
+  }
+
+  done_read = 0;
+  for (index = 0;
+       index < req->fs.info.nbufs && done_read < read_size;
+       ++index) {
+    int err;
+    size_t this_read_size = MIN(req->fs.info.bufs[index].len,
+                                read_size - done_read);
+    __try {
+      memcpy(req->fs.info.bufs[index].base,
+             (char*) view + view_offset + done_read,
+             this_read_size);
+    }
+    __except (fs__filemap_ex_filter(GetExceptionCode(),
+      GetExceptionInformation(), &err)) {
+      SET_REQ_WIN32_ERROR(req, err);
+      UnmapViewOfFile(view);
+      return;
+    }
+    done_read += this_read_size;
+  }
+  assert(done_read == read_size);
+
+  if (!UnmapViewOfFile(view)) {
+    SET_REQ_WIN32_ERROR(req, GetLastError());
+    return;
+  }
+
+  if (req->fs.info.offset == -1) {
+    fd_info->current_pos = end_pos;
+    uv__fd_hash_add(fd, fd_info);
+  }
+
+  SET_REQ_RESULT(req, read_size);
+  return;
+}
+
 void fs__read(uv_fs_t* req) {
   int fd = req->file.fd;
   int64_t offset = req->fs.info.offset;
@@ -631,6 +806,7 @@ void fs__read(uv_fs_t* req) {
   LARGE_INTEGER original_position;
   LARGE_INTEGER zero_offset;
   int restore_position;
+  struct uv__fd_info_s fd_info;
 
   VERIFY_FD(fd, req);
 
@@ -640,6 +816,11 @@ void fs__read(uv_fs_t* req) {
 
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
+    return;
+  }
+
+  if (uv__fd_hash_get(fd, &fd_info)) {
+    fs__read_filemap(req, handle, &fd_info);
     return;
   }
 
@@ -690,6 +871,126 @@ void fs__read(uv_fs_t* req) {
 }
 
 
+void fs__write_filemap(uv_fs_t* req, HANDLE file,
+                       struct uv__fd_info_s* fd_info) {
+  int fd = req->file.fd; // VERIFY_FD done in fs__write
+  int force_append = fd_info->flags & UV_FS_O_APPEND;
+  int rw_flags = fd_info->flags &
+    (UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR);
+  size_t write_size;
+  unsigned int index;
+  LARGE_INTEGER zero, pos, end_pos;
+  size_t view_offset;
+  LARGE_INTEGER view_base;
+  DWORD view_access;
+  void* view;
+  ssize_t written;
+  FILETIME ft;
+
+  write_size = 0;
+  for (index = 0; index < req->fs.info.nbufs; ++index) {
+    write_size += req->fs.info.bufs[index].len;
+  }
+
+  if (write_size == 0) {
+    SET_REQ_RESULT(req, 0);
+    return;
+  }
+
+  zero.QuadPart = 0;
+  if (force_append) {
+    pos = fd_info->size;
+  }
+  else if (req->fs.info.offset == -1) {
+    pos = fd_info->current_pos;
+  }
+  else {
+    pos.QuadPart = req->fs.info.offset;
+  }
+
+  end_pos.QuadPart = pos.QuadPart + write_size;
+
+  // Recreate the mapping to enlarge the file if needed
+  if (end_pos.QuadPart > fd_info->size.QuadPart) {
+    DWORD flProtect;
+
+    if (fd_info->mapping != INVALID_HANDLE_VALUE) {
+      CloseHandle(fd_info->mapping);
+    }
+
+    flProtect = (rw_flags == UV_FS_O_RDONLY) ? PAGE_READONLY : PAGE_READWRITE;
+    fd_info->mapping = CreateFileMapping(file,
+                                         NULL,
+                                         flProtect,
+                                         end_pos.HighPart,
+                                         end_pos.LowPart,
+                                         NULL);
+    if (fd_info->mapping == NULL) {
+      SET_REQ_WIN32_ERROR(req, GetLastError());
+      CloseHandle(file);
+      fd_info->mapping = INVALID_HANDLE_VALUE;
+      fd_info->size.QuadPart = 0;
+      fd_info->current_pos.QuadPart = 0;
+      uv__fd_hash_add(fd, fd_info);
+      return;
+    }
+
+    fd_info->size = end_pos;
+    uv__fd_hash_add(fd, fd_info);
+  }
+
+  view_offset = pos.QuadPart % uv__allocation_granularity;
+  view_base.QuadPart = pos.QuadPart - view_offset;
+  view_access = (rw_flags == UV_FS_O_RDONLY) ? FILE_MAP_READ : FILE_MAP_WRITE;
+  view = MapViewOfFile(fd_info->mapping,
+                       view_access,
+                       view_base.HighPart,
+                       view_base.LowPart,
+                       view_offset + write_size);
+  if (view == NULL) {
+    SET_REQ_WIN32_ERROR(req, GetLastError());
+    return;
+  }
+
+  written = 0;
+  for (index = 0; index < req->fs.info.nbufs; ++index) {
+    int err;
+    __try {
+      memcpy((char*)view + view_offset + written,
+        req->fs.info.bufs[index].base,
+        req->fs.info.bufs[index].len);
+    }
+    __except (fs__filemap_ex_filter(GetExceptionCode(),
+      GetExceptionInformation(), &err)) {
+      SET_REQ_WIN32_ERROR(req, err);
+      UnmapViewOfFile(view);
+      return;
+    }
+    written += req->fs.info.bufs[index].len;
+  }
+  assert(written == write_size);
+
+  if (!FlushViewOfFile(view, 0)) {
+    SET_REQ_WIN32_ERROR(req, GetLastError());
+    UnmapViewOfFile(view);
+    return;
+  }
+  if (!UnmapViewOfFile(view)) {
+    SET_REQ_WIN32_ERROR(req, GetLastError());
+    return;
+  }
+
+  if (req->fs.info.offset == -1) {
+    fd_info->current_pos = end_pos;
+    uv__fd_hash_add(fd, fd_info);
+  }
+
+  GetSystemTimeAsFileTime(&ft);
+  SetFileTime(file, NULL, NULL, &ft);
+
+  SET_REQ_RESULT(req, written);
+}
+
 void fs__write(uv_fs_t* req) {
   int fd = req->file.fd;
   int64_t offset = req->fs.info.offset;
@@ -702,6 +1003,7 @@ void fs__write(uv_fs_t* req) {
   LARGE_INTEGER original_position;
   LARGE_INTEGER zero_offset;
   int restore_position;
+  struct uv__fd_info_s fd_info;
 
   VERIFY_FD(fd, req);
 
@@ -710,6 +1012,11 @@ void fs__write(uv_fs_t* req) {
   handle = uv__get_osfhandle(fd);
   if (handle == INVALID_HANDLE_VALUE) {
     SET_REQ_WIN32_ERROR(req, ERROR_INVALID_HANDLE);
+    return;
+  }
+
+  if (uv__fd_hash_get(fd, &fd_info)) {
+    fs__write_filemap(req, handle, &fd_info);
     return;
   }
 
@@ -1526,6 +1833,7 @@ static void fs__fdatasync(uv_fs_t* req) {
 static void fs__ftruncate(uv_fs_t* req) {
   int fd = req->file.fd;
   HANDLE handle;
+  struct uv__fd_info_s fd_info = { 0 };
   NTSTATUS status;
   IO_STATUS_BLOCK io_status;
   FILE_END_OF_FILE_INFORMATION eof_info;
@@ -1533,6 +1841,12 @@ static void fs__ftruncate(uv_fs_t* req) {
   VERIFY_FD(fd, req);
 
   handle = uv__get_osfhandle(fd);
+
+  if (uv__fd_hash_get(fd, &fd_info)) {
+    if (fd_info.mapping != INVALID_HANDLE_VALUE) {
+      CloseHandle(fd_info.mapping);
+    }
+  }
 
   eof_info.EndOfFile.QuadPart = req->fs.info.offset;
 
@@ -1546,6 +1860,35 @@ static void fs__ftruncate(uv_fs_t* req) {
     SET_REQ_RESULT(req, 0);
   } else {
     SET_REQ_WIN32_ERROR(req, pRtlNtStatusToDosError(status));
+  }
+
+  if (fd_info.flags) {
+    fd_info.size = eof_info.EndOfFile;
+
+    if (fd_info.size.QuadPart == 0) {
+      fd_info.mapping = INVALID_HANDLE_VALUE;
+    }
+    else {
+      DWORD flProtect = ((fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
+        UV_FS_O_RDWR)) == UV_FS_O_RDONLY) ? PAGE_READONLY : PAGE_READWRITE;
+      fd_info.mapping = CreateFileMapping(handle,
+                                          NULL,
+                                          flProtect,
+                                          fd_info.size.HighPart,
+                                          fd_info.size.LowPart,
+                                          NULL);
+      if (fd_info.mapping == NULL) {
+        SET_REQ_WIN32_ERROR(req, GetLastError());
+        CloseHandle(handle);
+        fd_info.mapping = INVALID_HANDLE_VALUE;
+        fd_info.size.QuadPart = 0;
+        fd_info.current_pos.QuadPart = 0;
+        uv__fd_hash_add(fd, &fd_info);
+        return;
+      }
+    }
+
+    uv__fd_hash_add(fd, &fd_info);
   }
 }
 

@@ -1469,7 +1469,7 @@ TEST_IMPL(fs_chmod) {
   uv_run(loop, UV_RUN_DEFAULT);
   ASSERT(fchmod_cb_count == 1);
 
-  close(file);
+  uv_fs_close(loop, &req, file, NULL);
 
   /*
    * Run the loop just to check we don't have make any extraneous uv_ref()
@@ -1512,7 +1512,7 @@ TEST_IMPL(fs_unlink_readonly) {
   ASSERT(req.result == sizeof(test_buf));
   uv_fs_req_cleanup(&req);
 
-  close(file);
+  uv_fs_close(loop, &req, file, NULL);
 
   /* Make the file read-only */
   r = uv_fs_chmod(NULL, &req, "test_file", 0400, NULL);
@@ -1571,7 +1571,7 @@ TEST_IMPL(fs_unlink_archive_readonly) {
   ASSERT(req.result == sizeof(test_buf));
   uv_fs_req_cleanup(&req);
 
-  close(file);
+  uv_fs_close(loop, &req, file, NULL);
 
   /* Make the file read-only and clear archive flag */
   r = SetFileAttributes("test_file", FILE_ATTRIBUTE_READONLY);
@@ -1718,7 +1718,7 @@ TEST_IMPL(fs_link) {
   ASSERT(req.result == sizeof(test_buf));
   uv_fs_req_cleanup(&req);
 
-  close(file);
+  uv_fs_close(loop, &req, file, NULL);
 
   /* sync link */
   r = uv_fs_link(NULL, &req, "test_file", "test_file_link", NULL);
@@ -1760,7 +1760,7 @@ TEST_IMPL(fs_link) {
   ASSERT(req.result >= 0);
   ASSERT(strcmp(buf, test_buf) == 0);
 
-  close(link);
+  uv_fs_close(loop, &req, link, NULL);
 
   /*
    * Run the loop just to check we don't have make any extraneous uv_ref()
@@ -1867,7 +1867,7 @@ TEST_IMPL(fs_symlink) {
   ASSERT(req.result == sizeof(test_buf));
   uv_fs_req_cleanup(&req);
 
-  close(file);
+  uv_fs_close(loop, &req, file, NULL);
 
   /* sync symlink */
   r = uv_fs_symlink(NULL, &req, "test_file", "test_file_symlink", 0, NULL);
@@ -1905,7 +1905,7 @@ TEST_IMPL(fs_symlink) {
   ASSERT(req.result >= 0);
   ASSERT(strcmp(buf, test_buf) == 0);
 
-  close(link);
+  uv_fs_close(loop, &req, link, NULL);
 
   r = uv_fs_symlink(NULL,
                     &req,
@@ -1967,7 +1967,7 @@ TEST_IMPL(fs_symlink) {
   ASSERT(req.result >= 0);
   ASSERT(strcmp(buf, test_buf) == 0);
 
-  close(link);
+  uv_fs_close(loop, &req, link, NULL);
 
   r = uv_fs_symlink(NULL,
                     &req,
@@ -2289,7 +2289,7 @@ TEST_IMPL(fs_utime) {
   ASSERT(r >= 0);
   ASSERT(req.result >= 0);
   uv_fs_req_cleanup(&req);
-  close(r);
+  uv_fs_close(loop, &req, r, NULL);
 
   atime = mtime = 400497753; /* 1982-09-10 11:22:33 */
 
@@ -2384,7 +2384,7 @@ TEST_IMPL(fs_futime) {
   ASSERT(r >= 0);
   ASSERT(req.result >= 0);
   uv_fs_req_cleanup(&req);
-  close(r);
+  uv_fs_close(loop, &req, r, NULL);
 
   atime = mtime = 400497753; /* 1982-09-10 11:22:33 */
 
