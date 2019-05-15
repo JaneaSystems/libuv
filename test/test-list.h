@@ -326,6 +326,7 @@ TEST_DECLARE   (fs_futime)
 TEST_DECLARE   (fs_file_open_append)
 TEST_DECLARE   (fs_stat_missing_path)
 TEST_DECLARE   (fs_read_file_eof)
+TEST_DECLARE   (fs_fd_hash)
 TEST_DECLARE   (fs_event_watch_dir)
 TEST_DECLARE   (fs_event_watch_dir_recursive)
 #ifdef _WIN32
@@ -913,6 +914,7 @@ TASK_LIST_START
   TEST_ENTRY  (fs_stat_missing_path)
   TEST_ENTRY  (fs_read_file_eof)
   TEST_ENTRY  (fs_file_open_append)
+  TEST_ENTRY  (fs_fd_hash)
   TEST_ENTRY  (fs_event_watch_dir)
   TEST_ENTRY  (fs_event_watch_dir_recursive)
 #ifdef _WIN32

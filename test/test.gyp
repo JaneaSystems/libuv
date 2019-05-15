@@ -35,6 +35,7 @@
         'test-fs-readdir.c',
         'test-fs-copyfile.c',
         'test-fs-event.c',
+        'test-fs-fd-hash.c',
         'test-fs-poll.c',
         'test-getters-setters.c',
         'test-get-currentexe.c',
