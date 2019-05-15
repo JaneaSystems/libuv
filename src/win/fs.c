@@ -715,9 +715,11 @@ LONG fs__filemap_ex_filter(LONG excode, PEXCEPTION_POINTERS pep,
       pep->ExceptionRecord->NumberParameters >= 3) {
     NTSTATUS status = (NTSTATUS)pep->ExceptionRecord->ExceptionInformation[3];
     *perror = pRtlNtStatusToDosError(status);
-  } else {
-    *perror = UV_UNKNOWN;
+    if (*perror != ERROR_SUCCESS) {
+      return EXCEPTION_EXECUTE_HANDLER;
+    }
   }
+  *perror = UV_UNKNOWN;
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
