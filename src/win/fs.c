@@ -639,7 +639,7 @@ void fs__open(uv_fs_t* req) {
       fd_info.size.QuadPart = 0;
       fd_info.mapping = INVALID_HANDLE_VALUE;
     } else {
-      if (!GetFileSizeEx(file, &(fd_info.size))) {
+      if (!GetFileSizeEx(file, &fd_info.size)) {
         SET_REQ_WIN32_ERROR(req, GetLastError());
         CloseHandle(file);
         return;
@@ -648,8 +648,8 @@ void fs__open(uv_fs_t* req) {
       if (fd_info.size.QuadPart == 0) {
         fd_info.mapping = INVALID_HANDLE_VALUE;
       } else {
-        DWORD flProtect = ((fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
-          UV_FS_O_RDWR)) == UV_FS_O_RDONLY) ? PAGE_READONLY : PAGE_READWRITE;
+        DWORD flProtect = (fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
+          UV_FS_O_RDWR)) == UV_FS_O_RDONLY ? PAGE_READONLY : PAGE_READWRITE;
         fd_info.mapping = CreateFileMapping(file,
                                             NULL,
                                             flProtect,
@@ -1907,8 +1907,8 @@ static void fs__ftruncate(uv_fs_t* req) {
     if (fd_info.size.QuadPart == 0) {
       fd_info.mapping = INVALID_HANDLE_VALUE;
     } else {
-      DWORD flProtect = ((fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
-        UV_FS_O_RDWR)) == UV_FS_O_RDONLY) ? PAGE_READONLY : PAGE_READWRITE;
+      DWORD flProtect = (fd_info.flags & (UV_FS_O_RDONLY | UV_FS_O_WRONLY |
+        UV_FS_O_RDWR)) == UV_FS_O_RDONLY ? PAGE_READONLY : PAGE_READWRITE;
       fd_info.mapping = CreateFileMapping(handle,
                                           NULL,
                                           flProtect,

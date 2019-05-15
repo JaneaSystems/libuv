@@ -78,7 +78,7 @@ INLINE static void uv__fd_hash_init() {
   do {                                                                       \
     for (i = 0; i < group_size; ++i) {                                       \
       if (group_ptr->entries[i].fd == fd) {                                  \
-        entry_ptr = &(group_ptr->entries[i]);                                \
+        entry_ptr = &group_ptr->entries[i];                                  \
         break;                                                               \
       }                                                                      \
     }                                                                        \
@@ -87,7 +87,7 @@ INLINE static void uv__fd_hash_init() {
 #define FIND_IN_BUCKET_PTR()                                                 \
   do {                                                                       \
     size_t first_group_size = bucket_ptr->size % UV__FD_HASH_GROUP_SIZE;     \
-    if ((bucket_ptr->size != 0) && (first_group_size == 0))                  \
+    if (bucket_ptr->size != 0 && first_group_size == 0)                      \
       first_group_size = UV__FD_HASH_GROUP_SIZE;                             \
     group_ptr = bucket_ptr->data;                                            \
     FIND_IN_GROUP_PTR(first_group_size);                                     \
@@ -122,7 +122,7 @@ INLINE static void uv__fd_hash_add(int fd, struct uv__fd_info_s* info) {
   if (!entry_ptr) {
     i = bucket_ptr->size % UV__FD_HASH_GROUP_SIZE;
 
-    if ((bucket_ptr->size != 0) && (i == 0)) {
+    if (bucket_ptr->size != 0 && i == 0) {
       struct uv__fd_hash_entry_group_s* new_group_ptr =
         uv__malloc(sizeof(struct uv__fd_hash_entry_group_s));
       if (!new_group_ptr) {
@@ -133,7 +133,7 @@ INLINE static void uv__fd_hash_add(int fd, struct uv__fd_info_s* info) {
     }
 
     bucket_ptr->size += 1;
-    entry_ptr = &(bucket_ptr->data->entries[i]);
+    entry_ptr = &bucket_ptr->data->entries[i];
     entry_ptr->fd = fd;
   }
 
@@ -155,12 +155,12 @@ INLINE static int uv__fd_hash_remove(int fd, struct uv__fd_info_s* info) {
     bucket_ptr->size -= 1;
 
     i = bucket_ptr->size % UV__FD_HASH_GROUP_SIZE;
-    if (entry_ptr != &(bucket_ptr->data->entries[i])) {
+    if (entry_ptr != &bucket_ptr->data->entries[i]) {
       *entry_ptr = bucket_ptr->data->entries[i];
     }
 
-    if ((bucket_ptr->size != 0) &&
-        (bucket_ptr->size % UV__FD_HASH_GROUP_SIZE == 0)) {
+    if (bucket_ptr->size != 0 &&
+        bucket_ptr->size % UV__FD_HASH_GROUP_SIZE == 0) {
       struct uv__fd_hash_entry_group_s* old_group_ptr = bucket_ptr->data;
       bucket_ptr->data = old_group_ptr->next;
       uv__free(old_group_ptr);
