@@ -60,7 +60,7 @@ INLINE static void uv__fd_hash_init() {
     uv_fatal_error(err, "uv_mutex_init");
   }
 
-  for (i = 0; i < UV__FD_HASH_SIZE; ++i) {
+  for (i = 0; i < ARRAY_SIZE(uv__fd_hash); ++i) {
     uv__fd_hash[i].size = 0;
     uv__fd_hash[i].data =
         uv__fd_hash_entry_initial + i * UV__FD_HASH_GROUP_SIZE;
@@ -69,7 +69,7 @@ INLINE static void uv__fd_hash_init() {
 
 #define FIND_COMMON_VARIABLES                                                \
   unsigned i;                                                                \
-  unsigned bucket = fd % UV__FD_HASH_SIZE;                                   \
+  unsigned bucket = fd % ARRAY_SIZE(uv__fd_hash);                            \
   struct uv__fd_hash_entry_s* entry_ptr = NULL;                              \
   struct uv__fd_hash_entry_group_s* group_ptr;                               \
   struct uv__fd_hash_bucket_s* bucket_ptr = &uv__fd_hash[bucket];
