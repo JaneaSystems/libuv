@@ -52,7 +52,7 @@ static struct uv__fd_hash_entry_group_s
 static struct uv__fd_hash_bucket_s uv__fd_hash[UV__FD_HASH_SIZE];
 
 
-INLINE static void uv__fd_hash_init() {
+INLINE static void uv__fd_hash_init(void) {
   int i, err;
 
   err = uv_mutex_init(&uv__fd_hash_mutex);
@@ -124,7 +124,7 @@ INLINE static void uv__fd_hash_add(int fd, struct uv__fd_info_s* info) {
 
     if (bucket_ptr->size != 0 && i == 0) {
       struct uv__fd_hash_entry_group_s* new_group_ptr =
-        uv__malloc(sizeof(struct uv__fd_hash_entry_group_s));
+        uv__malloc(sizeof(*new_group_ptr));
       if (new_group_ptr == NULL) {
         uv_fatal_error(ERROR_OUTOFMEMORY, "uv__malloc");
       }

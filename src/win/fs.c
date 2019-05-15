@@ -127,7 +127,7 @@
 #define IS_LETTER(c) (((c) >= L'a' && (c) <= L'z') || \
   ((c) >= L'A' && (c) <= L'Z'))
 
-#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MIN(a,b) (((a) < (b)) ? (a) : (b))
 
 const WCHAR JUNCTION_PREFIX[] = L"\\??\\";
 const WCHAR JUNCTION_PREFIX_LEN = 4;
@@ -790,7 +790,7 @@ void fs__read_filemap(uv_fs_t* req, struct uv__fd_info_s* fd_info) {
                                 read_size - done_read);
     __try {
       memcpy(req->fs.info.bufs[index].base,
-             (char*) view + view_offset + done_read,
+             (char*)view + view_offset + done_read,
              this_read_size);
     }
     __except (fs__filemap_ex_filter(GetExceptionCode(),
