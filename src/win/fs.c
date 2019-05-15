@@ -725,7 +725,7 @@ LONG fs__filemap_ex_filter(LONG excode, PEXCEPTION_POINTERS pep,
 
 
 void fs__read_filemap(uv_fs_t* req, struct uv__fd_info_s* fd_info) {
-  int fd = req->file.fd; // VERIFY_FD done in fs__read
+  int fd = req->file.fd; /* VERIFY_FD done in fs__read */
   int rw_flags = fd_info->flags &
     (UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR);
   size_t read_size, done_read;
@@ -897,7 +897,7 @@ void fs__read(uv_fs_t* req) {
 
 void fs__write_filemap(uv_fs_t* req, HANDLE file,
                        struct uv__fd_info_s* fd_info) {
-  int fd = req->file.fd; // VERIFY_FD done in fs__write
+  int fd = req->file.fd; /* VERIFY_FD done in fs__write */
   int force_append = fd_info->flags & UV_FS_O_APPEND;
   int rw_flags = fd_info->flags &
     (UV_FS_O_RDONLY | UV_FS_O_WRONLY | UV_FS_O_RDWR);
@@ -939,7 +939,7 @@ void fs__write_filemap(uv_fs_t* req, HANDLE file,
 
   end_pos.QuadPart = pos.QuadPart + write_size;
 
-  // Recreate the mapping to enlarge the file if needed
+  /* Recreate the mapping to enlarge the file if needed */
   if (end_pos.QuadPart > fd_info->size.QuadPart) {
     if (fd_info->mapping != INVALID_HANDLE_VALUE) {
       CloseHandle(fd_info->mapping);
