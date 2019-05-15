@@ -711,7 +711,7 @@ LONG fs__filemap_ex_filter(LONG excode, PEXCEPTION_POINTERS pep,
   }
 
   assert(perror != NULL);
-  if (pep && pep->ExceptionRecord &&
+  if (pep != NULL && pep->ExceptionRecord != NULL &&
       pep->ExceptionRecord->NumberParameters >= 3) {
     NTSTATUS status = (NTSTATUS)pep->ExceptionRecord->ExceptionInformation[3];
     *perror = pRtlNtStatusToDosError(status);

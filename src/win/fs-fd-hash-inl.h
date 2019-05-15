@@ -92,7 +92,7 @@ INLINE static void uv__fd_hash_init() {
     group_ptr = bucket_ptr->data;                                            \
     FIND_IN_GROUP_PTR(first_group_size);                                     \
     for (group_ptr = group_ptr->next;                                        \
-         group_ptr && !entry_ptr;                                            \
+         group_ptr != NULL && entry_ptr == NULL;                             \
          group_ptr = group_ptr->next)                                        \
       FIND_IN_GROUP_PTR(UV__FD_HASH_GROUP_SIZE);                             \
   } while (0)
@@ -104,7 +104,7 @@ INLINE static int uv__fd_hash_get(int fd, struct uv__fd_info_s* info) {
 
   FIND_IN_BUCKET_PTR();
 
-  if (entry_ptr) {
+  if (entry_ptr != NULL) {
     *info = entry_ptr->info;
   }
 
@@ -119,13 +119,13 @@ INLINE static void uv__fd_hash_add(int fd, struct uv__fd_info_s* info) {
 
   FIND_IN_BUCKET_PTR();
 
-  if (!entry_ptr) {
+  if (entry_ptr == NULL) {
     i = bucket_ptr->size % UV__FD_HASH_GROUP_SIZE;
 
     if (bucket_ptr->size != 0 && i == 0) {
       struct uv__fd_hash_entry_group_s* new_group_ptr =
         uv__malloc(sizeof(struct uv__fd_hash_entry_group_s));
-      if (!new_group_ptr) {
+      if (new_group_ptr == NULL) {
         uv_fatal_error(ERROR_OUTOFMEMORY, "uv__malloc");
       }
       new_group_ptr->next = bucket_ptr->data;
@@ -149,7 +149,7 @@ INLINE static int uv__fd_hash_remove(int fd, struct uv__fd_info_s* info) {
 
   FIND_IN_BUCKET_PTR();
 
-  if (entry_ptr) {
+  if (entry_ptr != NULL) {
     *info = entry_ptr->info;
 
     bucket_ptr->size -= 1;
