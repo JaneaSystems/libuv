@@ -98,19 +98,19 @@ TEST_IMPL(fs_fd_hash) {
   /* Update */
   {
     struct uv__fd_info_s info = { 0 };
-    info.flags = 2 + FD_DIFF + FD_DIFF;
-    uv__fd_hash_add(2, &info);
+    info.flags = FD_DIFF + FD_DIFF;
+    uv__fd_hash_add(0, &info);
   }
   {
     struct uv__fd_info_s info = { 0 };
-    ASSERT(uv__fd_hash_get(2, &info));
-    ASSERT(info.flags == 2 + FD_DIFF + FD_DIFF);
+    ASSERT(uv__fd_hash_get(0, &info));
+    ASSERT(info.flags == FD_DIFF + FD_DIFF);
   }
   {
     /* Leave as it was, will be again tested below */
     struct uv__fd_info_s info = { 0 };
-    info.flags = 2 + FD_DIFF;
-    uv__fd_hash_add(2, &info);
+    info.flags = FD_DIFF;
+    uv__fd_hash_add(0, &info);
   }
 
   /* Remove all */
