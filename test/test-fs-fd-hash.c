@@ -19,6 +19,8 @@
  * IN THE SOFTWARE.
  */
 
+#if defined(_WIN32) && !defined(USING_UV_SHARED)
+
 #include "uv.h"
 #include "task.h"
 
@@ -123,3 +125,9 @@ TEST_IMPL(fs_fd_hash) {
   
   return 0;
 }
+
+#else
+
+typedef int file_has_no_tests;  /* ISO C forbids an empty translation unit. */
+
+#endif  /* ifndef _WIN32 */
