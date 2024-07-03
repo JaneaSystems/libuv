@@ -144,6 +144,8 @@ API
     use it more than once, it may fail. It is suggested to only call this
     function once per :c:type:`uv_connection_cb` call. As :c:type:`uv_accept`.
 
+    .. versionadded:: REPLACEME
+
 .. c:function:: int uv_read_start(uv_stream_t* stream, uv_alloc_cb alloc_cb, uv_read_cb read_cb)
 
     Read data from an incoming stream. The :c:type:`uv_read_cb` callback will
