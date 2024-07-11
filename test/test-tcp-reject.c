@@ -40,7 +40,11 @@ static void connection_cb(uv_stream_t* tcp, int status) {
   ASSERT_OK(uv_reject(tcp));
 
   /* The server should not have accepted the connection */
+#ifdef _WIN32
+  ASSERT(server.tcp.serv.pending_accepts->accept_socket == INVALID_SOCKET);
+#else
   ASSERT(server.accepted_fd == -1);
+#endif
 
   /* Close the server */
   uv_close((uv_handle_t*) &server, NULL);

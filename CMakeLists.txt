@@ -594,6 +594,7 @@ if(LIBUV_BUILD_TESTS)
        test/test-pipe-connect-prepare.c
        test/test-pipe-getsockname.c
        test/test-pipe-pending-instances.c
+       test/test-pipe-reject.c
        test/test-pipe-sendmsg.c
        test/test-pipe-server-close.c
        test/test-pipe-set-fchmod.c
@@ -632,6 +633,7 @@ if(LIBUV_BUILD_TESTS)
        test/test-tcp-bind6-error.c
        test/test-tcp-close-accept.c
        test/test-tcp-reject.c
+       test/test-tcp-reject-accept.c
        test/test-tcp-close-after-read-timeout.c
        test/test-tcp-close-while-connecting.c
        test/test-tcp-close.c
